@@ -1,0 +1,13 @@
+{
+    "name": "devsecops-pipeline-demo",
+    "version": "1.0.0",
+    "description": "DevSecOps pipeline demonstration with intentional vulnerabilities",
+    "main": "src/server.js",
+    "scripts" : {
+        "start": "node src/srver.js",
+        "test": "node src/test.js"
+    },
+    "dependencies": {
+        "express": "5.2.1"
+    }
+}
