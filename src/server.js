@@ -31,6 +31,12 @@ app.get('/ping', (req, res) => {
     res.json({ output: stdout });
   });
 });
+//VULNERABILITY: Unsafe eval (Semgrep will catch this)
+app.post('/calculate', (req, res) => {
+   const expression = req.body.expression;
+   const result = eval(expression); 
+   res.json({result: result});
+})
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
