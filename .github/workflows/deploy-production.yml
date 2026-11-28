@@ -1,0 +1,79 @@
+name: Deploy to Production
+
+# Manual trigger only - this is the approval gate
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (use the commit SHA from a successful staging run)'
+        required: true
+        type: string
+      confirm_deployment:
+        description: 'Type DEPLOY to confirm production deployment'
+        required: true
+        type: string
+
+jobs:
+  validate:
+    name: Validate Deployment Request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_deployment }}" != "DEPLOY" ]; then
+            echo "Deployment not confirmed. You must type DEPLOY to proceed."
+            exit 1
+          fi
+          echo "Deployment confirmed."
+
+      - name: Verify image tag format
+        run: |
+          if [ -z "${{ github.event.inputs.image_tag }}" ]; then
+            echo "Image tag is required."
+            exit 1
+          fi
+          echo "Deploying image: ${{ github.event.inputs.image_tag }}"
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t devsecops-app:${{ github.event.inputs.image_tag }} .
+          echo "Image built for production deployment."
+
+      - name: Simulate ECS production deployment
+        run: |
+          echo "=== PRODUCTION DEPLOYMENT ==="
+          echo "Updating ECS task definition..."
+          echo "  Cluster: devsecops-production"
+          echo "  Service: devsecops-app-production"
+          echo "  Image: devsecops-app:${{ github.event.inputs.image_tag }}"
+          echo "  CPU: 512 | Memory: 1024"
+          echo "  Desired count: 2"
+          echo "Waiting for service stability..."
+          echo "Production deployment complete."
+
+      - name: Run production health check
+        run: |
+          docker run -d -p 3000:3000 --name prod-app devsecops-app:${{ github.event.inputs.image_tag }}
+          sleep 5
+          if curl -s http://localhost:3000/health | grep -q healthy; then
+            echo "Production health check PASSED"
+          else
+            echo "Production health check FAILED - ROLLBACK NEEDED"
+            exit 1
+          fi
+          docker stop prod-app && docker rm prod-app
+
+      - name: Record production deployment
+        run: |
+          echo "Production deployment successful"
+          echo "  Deployed by: ${{ github.actor }}"
+          echo "  Image: ${{ github.event.inputs.image_tag }}"
+          echo "  Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

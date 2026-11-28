@@ -1,4 +1,3 @@
-
 name: DevSecOps Pipeline
 
 on:
@@ -12,28 +11,17 @@ permissions:
   security-events: write
 
 jobs:
-
-  # ==========================================
-  # JOB 1: SAST - SEMGREP
-  # ==========================================
   sast:
     name: SAST - Semgrep
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
       - name: Install Semgrep
-        run: python -m pip install semgrep
+        run: pip install semgrep
 
       - name: Run Semgrep SAST scan
-        continue-on-error: true
         run: |
           semgrep scan \
             --config p/nodejs \
@@ -41,21 +29,17 @@ jobs:
             --sarif \
             --output semgrep.sarif \
             src/
+        continue-on-error: true
 
-      - name: Upload Semgrep SARIF results
-        if: always()
+      - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
+        if: always()
         with:
           sarif_file: semgrep.sarif
           category: semgrep-sast
-
-  # ==========================================
-  # JOB 2: CONTAINER SECURITY - TRIVY
-  # ==========================================
   container-scan:
     name: Container Security - Trivy
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -67,76 +51,58 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: devsecops-app:${{ github.sha }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
           exit-code: '1'
 
-      - name: Upload Trivy SARIF results
-        if: always()
+      - name: Upload Trivy SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
+        if: always()
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container
-
-  # ==========================================
-  # JOB 3: DAST - OWASP ZAP
-  # ==========================================
   dast:
     name: DAST - OWASP ZAP
     runs-on: ubuntu-latest
     needs: container-scan
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t devsecops-app:test .
-
-      - name: Start application container
+      - name: Build and start application
         run: |
-          docker run -d \
-            -p 3000:3000 \
-            --name app \
-            devsecops-app:test
+          docker build -t devsecops-app:test .
+          docker run -d -p 3000:3000 --name app devsecops-app:test
+          sleep 5
 
-      - name: Wait for application health
+      - name: Wait for application to be ready
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:3000/health | grep -q healthy; then
+            if curl -s http://localhost:3000/health | grep -q healthy; then
               echo "Application is ready"
               exit 0
             fi
             sleep 2
           done
-
           echo "Application failed to start"
-          docker logs app
           exit 1
 
-      - name: Run OWASP ZAP baseline scan
+      - name: Run OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.15.0
         with:
-          target: http://localhost:3000
+          target: 'http://localhost:3000'
           fail_action: true
           artifact_name: zap-report
 
-      - name: Stop application container
+      - name: Stop application
         if: always()
-        run: |
-          docker stop app || true
-          docker rm app || true
-
-  # ==========================================
-  # JOB 4: DEPLOY TO STAGING
-  # ==========================================
+        run: docker stop app && docker rm app
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [sast, container-scan, dast]
     if: success()
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -144,7 +110,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build -t devsecops-app:${{ github.sha }} .
-          echo "Image built successfully"
+          echo "Image built: devsecops-app:${{ github.sha }}"
 
       - name: Simulate ECR push
         run: |
@@ -155,27 +121,26 @@ jobs:
       - name: Simulate ECS staging deployment
         run: |
           echo "Updating ECS task definition..."
-          echo "Cluster: devsecops-staging"
-          echo "Service: devsecops-app-staging"
+          echo "  Cluster: devsecops-staging"
+          echo "  Service: devsecops-app-staging"
+          echo "  Image: devsecops-app:${{ github.sha }}"
+          echo "  CPU: 256 | Memory: 512"
+          echo "Waiting for service stability..."
           echo "Deployment to staging complete."
 
       - name: Run staging smoke test
         run: |
+          # Start the container locally to verify it works
           docker run -d -p 3000:3000 --name staging-app devsecops-app:${{ github.sha }}
           sleep 5
-
-          if curl -fsS http://localhost:3000/health | grep -q healthy; then
+          # Health check
+          if curl -s http://localhost:3000/health | grep -q healthy; then
             echo "Staging smoke test PASSED"
           else
             echo "Staging smoke test FAILED"
-            docker logs staging-app
-            docker stop staging-app || true
-            docker rm staging-app || true
             exit 1
           fi
-
-          docker stop staging-app
-          docker rm staging-app
+          docker stop staging-app && docker rm staging-app
 
       - name: Record deployment
         run: |
